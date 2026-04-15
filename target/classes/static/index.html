@@ -306,6 +306,38 @@
 
                     <button id="btn-v2" class="btn" onclick="scanV2()">🗺️ &nbsp;Scan Real Routes</button>
 
+                    <div style="display:flex;gap:8px;margin-top:8px;">
+                        <button id="btn-randomize" class="btn"
+                            style="flex:1;background:linear-gradient(135deg,#7c3aed,#a855f7);"
+                            onclick="randomizeObstacles()">🎲 Randomize Obstacles</button>
+                        <button id="btn-place" class="btn"
+                            style="flex:1;background:linear-gradient(135deg,#b91c1c,#f97316);"
+                            onclick="togglePlaceMode()">📍 Place Obstacle</button>
+                    </div>
+                    <div id="place-hint" style="display:none;font-size:11px;color:#f97316;margin-top:4px;line-height:1.5;">
+                        Click anywhere on the map to place an obstacle. Click "Place Obstacle" again to stop.
+                    </div>
+                    <div id="obstacle-picker" style="display:none;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center;">
+                        <span style="font-size:11px;color:var(--text-muted);">Type:</span>
+                        <select id="obs-type" style="width:auto;padding:4px 8px;">
+                            <option value="ROAD_CLOSURE">🚧 Road Closure</option>
+                            <option value="FLOODING">🌊 Flooding</option>
+                            <option value="CONSTRUCTION">🏗 Construction</option>
+                            <option value="DEBRIS">🪨 Debris</option>
+                            <option value="ACCIDENT">💥 Accident</option>
+                            <option value="GRIDLOCK">🚦 Gridlock</option>
+                        </select>
+                        <select id="obs-severity" style="width:auto;padding:4px 8px;">
+                            <option value="5">Severity 5 (Moderate)</option>
+                            <option value="8">Severity 8 (Critical)</option>
+                            <option value="9">Severity 9 (Impassable)</option>
+                        </select>
+                        <button onclick="clearUserObstacles()"
+                            style="font-size:11px;background:transparent;border:1px solid #475569;color:#94a3b8;border-radius:6px;padding:3px 10px;cursor:pointer;">
+                            🗑 Clear All
+                        </button>
+                    </div>
+
                     <p style="font-size:11px; color:var(--text-muted); margin-top:6px; line-height:1.5;">
                         Uses Nominatim geocoding + OpenRouteService driving directions. Hazards are randomly injected for demonstration.
                     </p>
@@ -364,6 +396,11 @@
         let activeTab = 'v1';
         let leafletMap = null;
         let mapMarkers = [];
+        let userPlacedObstacles = [];   // [{lat, lng, type, severity}] — sent in POST body
+        let isPlacingObstacle = false;  // controls map-click mode
+        let obstacleMarkers = [];       // Leaflet marker refs for user obstacles (for clearing)
+        let lastOrigin = '';            // saved for Randomize re-scan
+        let lastDest = '';              // saved for Randomize re-scan
 
         // ── Tab switching ──
         function switchTab(tab) {
@@ -388,6 +425,33 @@
             ['loading-state','result-card','error-card','ranked-routes','map-container'].forEach(id => {
                 document.getElementById(id).classList.remove('visible');
             });
+        }
+
+        // Re-calls the last scan — ObstacleInjectionService re-seeds randomly each time
+        function randomizeObstacles() {
+            if (!lastOrigin || !lastDest) {
+                showError('No Route Scanned', 'Please scan a route first before randomizing.');
+                return;
+            }
+            scanV2WithData(lastOrigin, lastDest);
+        }
+
+        // Toggle map-click obstacle placement mode
+        function togglePlaceMode() {
+            isPlacingObstacle = !isPlacingObstacle;
+            const btn = document.getElementById('btn-place');
+            const hint = document.getElementById('place-hint');
+            const picker = document.getElementById('obstacle-picker');
+            btn.style.opacity = isPlacingObstacle ? '1' : '0.6';
+            hint.style.display = isPlacingObstacle ? 'block' : 'none';
+            picker.style.display = isPlacingObstacle ? 'flex' : 'none';
+        }
+
+        // Remove all user-placed obstacles from state and from the map
+        function clearUserObstacles() {
+            userPlacedObstacles = [];
+            obstacleMarkers.forEach(m => { if (leafletMap) leafletMap.removeLayer(m); });
+            obstacleMarkers = [];
         }
 
         function show(id) { document.getElementById(id).classList.add('visible'); }
@@ -447,19 +511,33 @@
         }
 
         // ── V2: Real Route Scan (/analyze) ──
+        // Entry point — validates inputs, saves state, delegates to core scan function
         async function scanV2() {
             const origin = document.getElementById('input-origin').value.trim();
             const dest   = document.getElementById('input-dest').value.trim();
-            if (!origin || !dest) { showError('Validation Error', 'Both origin and destination are required.'); return; }
+            if (!origin || !dest) {
+                showError('Validation Error', 'Both origin and destination are required.');
+                return;
+            }
+            lastOrigin = origin;
+            lastDest = dest;
+            await scanV2WithData(origin, dest);
+        }
 
+        // Core scan — called by scanV2() and randomizeObstacles()
+        async function scanV2WithData(origin, dest) {
             clearResults();
             show('loading-state');
             setBtnDisabled(true);
-
             try {
                 const res = await fetch('/api/v1/mobility/analyze', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ origin, destination: dest })
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        origin,
+                        destination: dest,
+                        userObstacles: userPlacedObstacles   // [] if none placed
+                    })
                 });
                 const data = await res.json();
                 hide('loading-state');
@@ -468,7 +546,9 @@
             } catch (err) {
                 hide('loading-state');
                 showError('Network Error', 'Could not reach the server. Is it running on :8080?');
-            } finally { setBtnDisabled(false); }
+            } finally {
+                setBtnDisabled(false);
+            }
         }
 
         function renderV2Result(data) {
@@ -483,6 +563,13 @@
                     ? '<span class="route-badge best-badge">⭐ Best</span>'
                     : `<span class="route-badge alt-badge">Option ${idx + 1}</span>`;
 
+                // Add status badge (CLEAR/HAZARDOUS/IMPASSABLE)
+                const statusColorMap = { CLEAR: '#10b981', HAZARDOUS: '#f59e0b', IMPASSABLE: '#ef4444' };
+                const statusEmojiMap = { CLEAR: '✅', HAZARDOUS: '⚠️', IMPASSABLE: '🚫' };
+                const sColor  = statusColorMap[route.status] || '#94a3b8';
+                const sEmoji  = statusEmojiMap[route.status] || '';
+                const statusBadge = `<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:${sColor}22;color:${sColor};font-weight:700;border:1px solid ${sColor}44;">${sEmoji} ${route.status || 'UNKNOWN'}</span>`;
+
                 let chips = '';
                 if (route.hazards && route.hazards.length > 0) {
                     chips = '<div class="hazard-chips">' +
@@ -494,7 +581,7 @@
                 <div class="${cardClass}">
                     <div class="route-card-header">
                         <div class="route-card-title">Route ${route.routeIndex + 1}</div>
-                        ${badge}
+                        <div>${statusBadge} ${badge}</div>
                     </div>
                     <div class="route-stats-row">
                         <div class="route-stat">📏 <strong>${route.distanceKm.toFixed(1)} km</strong></div>
@@ -516,60 +603,88 @@
 
         function renderMap(data) {
             show('map-container');
-
-            // Reset map if exists
             if (leafletMap) { leafletMap.remove(); leafletMap = null; }
             mapMarkers = [];
 
-            // Determine center from best route hazards or just center of first route
-            const best = data.bestRoute || data.rankedRoutes[0];
-            let centerLat = 12.97;  // Bangalore default
-            let centerLng = 77.59;
-
-            // Try to derive from hazard coords
-            const allHazards = data.rankedRoutes.flatMap(r => r.hazards || []).filter(h => h.segmentLat && h.segmentLng);
-            if (allHazards.length > 0) {
-                centerLat = allHazards.reduce((s, h) => s + h.segmentLat, 0) / allHazards.length;
-                centerLng = allHazards.reduce((s, h) => s + h.segmentLng, 0) / allHazards.length;
-            }
-
-            leafletMap = L.map('map').setView([centerLat, centerLng], 13);
+            leafletMap = L.map('map').setView([12.97, 77.59], 12);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; OSM contributors',
-                maxZoom: 18
+                attribution: '&copy; OSM contributors', maxZoom: 18
             }).addTo(leafletMap);
 
-            // Origin marker (green)
-            const greenIcon = L.divIcon({ html: '<div style="background:#10b981;width:16px;height:16px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 8px rgba(16,185,129,0.6);"></div>', className: '', iconSize: [16, 16], iconAnchor: [8, 8] });
-            // Dest marker (blue)
-            const blueIcon = L.divIcon({ html: '<div style="background:#3b82f6;width:16px;height:16px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 8px rgba(59,130,246,0.6);"></div>', className: '', iconSize: [16, 16], iconAnchor: [8, 8] });
+            // Map click → place user obstacle marker locally
+            leafletMap.on('click', function(e) {
+                if (!isPlacingObstacle) return;
+                const type     = document.getElementById('obs-type').value;
+                const severity = parseInt(document.getElementById('obs-severity').value, 10);
+                userPlacedObstacles.push({ lat: e.latlng.lat, lng: e.latlng.lng, type, severity });
 
-            // Plot hazards from ALL routes
-            const hazardColors = { WATERLOGGING: '#3b82f6', ACCIDENT: '#ef4444', GRIDLOCK: '#f59e0b' };
-            const bounds = [];
+                const isImpassableType = (type === 'ROAD_CLOSURE' || type === 'FLOODING') && severity >= 8;
+                const markerColor = isImpassableType ? '#ef4444' : '#f97316';
+                const icon = L.divIcon({
+                    html: `<div style="background:${markerColor};width:24px;height:24px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 8px ${markerColor};display:flex;align-items:center;justify-content:center;font-size:12px;">🚧</div>`,
+                    className: '', iconSize: [24, 24], iconAnchor: [12, 12]
+                });
+                const m = L.marker([e.latlng.lat, e.latlng.lng], { icon })
+                    .addTo(leafletMap)
+                    .bindPopup(`<strong>📍 User: ${type}</strong><br/>Severity: ${severity}/10`);
+                obstacleMarkers.push(m);
+            });
+
+            // Route color map
+            const polylineColor = { CLEAR: '#10b981', HAZARDOUS: '#f59e0b', IMPASSABLE: '#ef4444' };
+            const statusEmoji   = { CLEAR: '✅', HAZARDOUS: '⚠️', IMPASSABLE: '🚫' };
+            const hazardColors  = {
+                WATERLOGGING: '#3b82f6', ACCIDENT: '#ef4444', GRIDLOCK: '#f59e0b',
+                ROAD_CLOSURE: '#dc2626', CONSTRUCTION: '#f97316', FLOODING: '#6366f1', DEBRIS: '#78716c'
+            };
+
+            const allBounds = [];
 
             data.rankedRoutes.forEach(route => {
+                const color   = polylineColor[route.status] || '#94a3b8';
+                const weight  = route.isBestRoute ? 6 : 4;
+                const opacity = route.isBestRoute ? 1.0 : 0.7;
+
+                // Draw route polyline if geometry was returned
+                if (route.polyline && route.polyline.length > 1) {
+                    const line = L.polyline(route.polyline, { color, weight, opacity, lineJoin: 'round' })
+                        .addTo(leafletMap);
+
+                    // Midpoint info popup — click on route line to see details
+                    const midIdx = Math.floor(route.polyline.length / 2);
+                    const scoreDisplay = route.compositeScore > 1e15 ? '∞ (Impassable)' : route.compositeScore.toFixed(1);
+                    const bestLabel = route.isBestRoute ? ' ⭐ BEST' : '';
+                    line.bindPopup(`
+                        <div style="font-family:Inter,sans-serif;min-width:150px;line-height:1.6;">
+                            <strong>Route ${route.routeIndex + 1}${bestLabel}</strong><br/>
+                            ${statusEmoji[route.status] || ''} ${route.status}<br/>
+                            📏 <strong>${route.distanceKm.toFixed(1)} km</strong><br/>
+                            ⏱ <strong>${route.estimatedTotalMinutes} min</strong> (inc. hazard delays)<br/>
+                            📊 Score: ${scoreDisplay}
+                        </div>`);
+
+                    route.polyline.forEach(pt => allBounds.push(pt));
+                }
+
+                // Hazard circles
                 (route.hazards || []).forEach(h => {
                     if (h.segmentLat && h.segmentLng) {
-                        const color = hazardColors[h.type] || '#ef4444';
-                        const circle = L.circleMarker([h.segmentLat, h.segmentLng], {
-                            radius: 10, fillColor: color, color: '#fff', weight: 2,
-                            opacity: 0.9, fillOpacity: 0.7
-                        }).addTo(leafletMap);
-                        circle.bindPopup(`<strong>${h.type}</strong><br/>Route ${route.routeIndex + 1}<br/>Severity: ${h.severityScore}/10`);
-                        bounds.push([h.segmentLat, h.segmentLng]);
-                        mapMarkers.push(circle);
+                        const hColor = hazardColors[h.type] || '#ef4444';
+                        L.circleMarker([h.segmentLat, h.segmentLng], {
+                            radius: 9, fillColor: hColor, color: '#fff',
+                            weight: 2, opacity: 0.9, fillOpacity: 0.85
+                        }).addTo(leafletMap)
+                          .bindPopup(`<strong>${h.type}</strong><br/>On Route ${route.routeIndex + 1}<br/>Severity: ${h.severityScore}/10`);
+                        allBounds.push([h.segmentLat, h.segmentLng]);
                     }
                 });
             });
 
-            // If we have bounds, fit to them
-            if (bounds.length > 0) {
-                leafletMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+            if (allBounds.length > 0) {
+                leafletMap.fitBounds(allBounds, { padding: [40, 40], maxZoom: 14 });
             }
-
-            // Force map redraw after container becomes visible
-            setTimeout(() => { leafletMap.invalidateSize(); }, 200);
+            // Force redraw after container becomes visible
+            setTimeout(() => leafletMap.invalidateSize(), 200);
         }
 
         // ── Helpers ──

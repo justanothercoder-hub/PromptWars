@@ -4,5 +4,9 @@ public enum HazardType {
     WATERLOGGING,
     ACCIDENT,
     GRIDLOCK,
-    CLEAR
+    CLEAR,
+    ROAD_CLOSURE,
+    CONSTRUCTION,
+    FLOODING,
+    DEBRIS
 }

@@ -61,10 +61,11 @@ public class HazardPredictionService {
 
     private HazardCalculationStrategy resolveStrategy(HazardType type) {
         return switch (type) {
-            case WATERLOGGING -> waterloggingStrategy;
-            case ACCIDENT     -> accidentStrategy;
-            case GRIDLOCK     -> gridlockStrategy;
-            case CLEAR        -> clearRouteStrategy;
+            case WATERLOGGING  -> waterloggingStrategy;
+            case ACCIDENT      -> accidentStrategy;
+            case GRIDLOCK      -> gridlockStrategy;
+            case CLEAR         -> clearRouteStrategy;
+            case ROAD_CLOSURE, CONSTRUCTION, FLOODING, DEBRIS -> clearRouteStrategy; // v1 path uses mock data only
         };
     }
 
@@ -118,7 +119,7 @@ public class HazardPredictionService {
         Coordinates dest = geocodingService.geocode(request.destination());
 
         List<RouteSegment> rawRoutes = routingService.getRoutes(origin, dest);
-        List<RouteSegment> hazardRoutes = obstacleInjectionService.injectObstacles(rawRoutes, origin, dest);
+        List<RouteSegment> hazardRoutes = obstacleInjectionService.injectObstacles(rawRoutes, origin, dest, request.userObstacles());
         List<ScoredRoute> ranked = routeScorer.scoreAndRank(hazardRoutes);
 
         return new RouteAnalysisResponse(
