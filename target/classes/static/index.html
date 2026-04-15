@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Intelligent Route Navigator — Urban Mobility Intelligence</title>
+    <meta name="description" content="Real-time predictive hazard alerter with Leaflet.js map visualization. Scan real routes between locations for waterlogging, accidents, and gridlock." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg-deep:        #050b1a;
+            --bg-mid:         #0a1628;
+            --glass-bg:       rgba(255, 255, 255, 0.04);
+            --glass-border:   rgba(255, 255, 255, 0.10);
+            --glass-shadow:   0 8px 48px rgba(0, 0, 0, 0.6);
+            --accent-blue:    #3b82f6;
+            --accent-cyan:    #06b6d4;
+            --accent-glow:    rgba(59, 130, 246, 0.35);
+            --hazard-red:     #ef4444;
+            --hazard-amber:   #f59e0b;
+            --clear-green:    #10b981;
+            --clear-glow:     rgba(16, 185, 129, 0.25);
+            --text-primary:   #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted:     #475569;
+            --radius-lg:      16px;
+            --radius-xl:      24px;
+            --transition:     all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            --gold:           #fbbf24;
+        }
+
+        html, body {
+            height: 100%;
+            font-family: 'Inter', system-ui, sans-serif;
+            background-color: var(--bg-deep);
+            color: var(--text-primary);
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 80% 50% at 20% 10%, rgba(59,130,246,0.12) 0%, transparent 60%),
+                radial-gradient(ellipse 60% 40% at 80% 80%, rgba(6,182,212,0.10) 0%, transparent 60%),
+                radial-gradient(ellipse 40% 30% at 50% 50%, rgba(139,92,246,0.06) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .orb { position: fixed; border-radius: 50%; filter: blur(80px); pointer-events: none; z-index: 0; opacity: 0.5; animation: drift 18s ease-in-out infinite; }
+        .orb-1 { width: 400px; height: 400px; top: -100px; left: -100px; background: radial-gradient(circle, rgba(59,130,246,0.3), transparent); }
+        .orb-2 { width: 300px; height: 300px; bottom: -80px; right: -80px; background: radial-gradient(circle, rgba(6,182,212,0.25), transparent); animation-delay: -6s; }
+        .orb-3 { width: 250px; height: 250px; top: 50%; left: 60%; background: radial-gradient(circle, rgba(139,92,246,0.2), transparent); animation-delay: -12s; }
+
+        @keyframes drift {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33%      { transform: translate(30px, -20px) scale(1.05); }
+            66%      { transform: translate(-20px, 25px) scale(0.95); }
+        }
+
+        .page-wrapper {
+            position: relative; z-index: 1;
+            min-height: 100vh;
+            display: flex; flex-direction: column; align-items: center;
+            padding: 40px 16px 80px;
+        }
+
+        header { text-align: center; margin-bottom: 36px; animation: fadeDown 0.7s ease both; }
+
+        .logo-badge {
+            display: inline-flex; align-items: center; gap: 8px;
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: 100px; padding: 6px 16px;
+            font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
+            text-transform: uppercase; color: var(--accent-cyan);
+            margin-bottom: 16px; backdrop-filter: blur(12px);
+        }
+        .logo-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-cyan); animation: pulse-dot 2s ease infinite; }
+        @keyframes pulse-dot { 0%, 100% { opacity:1; transform:scale(1); } 50% { opacity:0.4; transform:scale(0.7); } }
+
+        h1 { font-size: clamp(1.8rem, 4vw, 3rem); font-weight: 800; line-height: 1.15;
+             background: linear-gradient(135deg, #f1f5f9, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; margin-bottom: 10px; }
+        h1 span { background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+
+        .subtitle { font-size: 0.95rem; color: var(--text-secondary); max-width: 520px; margin: 0 auto; line-height: 1.6; }
+
+        /* ── Layout: two-column on desktop ── */
+        .main-grid {
+            width: 100%; max-width: 1100px;
+            display: grid; grid-template-columns: 420px 1fr; gap: 24px;
+            animation: fadeUp 0.7s ease 0.15s both;
+        }
+        @media (max-width: 860px) { .main-grid { grid-template-columns: 1fr; } }
+
+        /* ── Glass Card ── */
+        .card {
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: var(--radius-xl); padding: 32px;
+            backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+            box-shadow: var(--glass-shadow);
+        }
+
+        .section-label { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; }
+
+        /* ── Tabs ── */
+        .tab-group { display: flex; gap: 4px; background: rgba(255,255,255,0.04); border-radius: 10px; padding: 4px; margin-bottom: 24px; }
+        .tab { flex: 1; padding: 8px; border: none; background: transparent; border-radius: 7px; color: var(--text-secondary); font-size: 13px; font-weight: 500; font-family: 'Inter', sans-serif; cursor: pointer; transition: var(--transition); }
+        .tab.active { background: rgba(59,130,246,0.2); color: var(--accent-blue); }
+        .tab:hover:not(.active) { background: rgba(255,255,255,0.06); color: var(--text-primary); }
+
+        .input-panel { display: none; flex-direction: column; gap: 10px; }
+        .input-panel.visible { display: flex; }
+
+        /* ── Inputs ── */
+        select, input[type="text"] {
+            width: 100%; padding: 13px 16px;
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+            border-radius: var(--radius-lg); color: var(--text-primary);
+            font-size: 14px; font-family: 'Inter', sans-serif; outline: none;
+            transition: var(--transition); appearance: none; -webkit-appearance: none;
+        }
+        select { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%2394a3b8' viewBox='0 0 16 16'%3E%3Cpath d='M7.247 11.14L2.451 5.658C1.885 5.013 2.345 4 3.204 4h9.592a1 1 0 0 1 .753 1.659l-4.796 5.48a1 1 0 0 1-1.506 0z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 16px center; padding-right: 44px; cursor: pointer; }
+        select option { background: #0f1d35; color: var(--text-primary); }
+        select:focus, input[type="text"]:focus { border-color: var(--accent-blue); background: rgba(59,130,246,0.08); box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+        input[type="text"]::placeholder { color: var(--text-muted); }
+
+        /* ── Buttons ── */
+        .btn {
+            width: 100%; padding: 14px; border: none; border-radius: var(--radius-lg);
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+            color: #fff; font-size: 14px; font-weight: 700; font-family: 'Inter', sans-serif;
+            letter-spacing: 0.03em; cursor: pointer; position: relative; overflow: hidden;
+            transition: var(--transition); box-shadow: 0 4px 24px var(--accent-glow); margin-top: 6px;
+        }
+        .btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 36px var(--accent-glow); }
+        .btn:active:not(:disabled) { transform: translateY(0); }
+        .btn:disabled { opacity: 0.7; cursor: not-allowed; transform: none; }
+
+        .divider { height: 1px; background: var(--glass-border); margin: 20px 0; }
+
+        /* ── Loading ── */
+        #loading-state { display: none; flex-direction: column; align-items: center; gap: 14px; padding: 20px 0; }
+        #loading-state.visible { display: flex; }
+        .spinner-ring { width: 44px; height: 44px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.08); border-top-color: var(--accent-blue); border-right-color: var(--accent-cyan); animation: spin 0.9s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { font-size: 13px; color: var(--text-secondary); font-weight: 500; animation: pulse-text 1.5s ease infinite; }
+        @keyframes pulse-text { 0%, 100% { opacity:1; } 50% { opacity:0.5; } }
+
+        /* ── V1 Result card (old check-route) ── */
+        #result-card { display: none; flex-direction: column; gap: 16px; animation: fadeUp 0.5s ease both; }
+        #result-card.visible { display: flex; }
+
+        .result-header { display: flex; align-items: center; gap: 12px; }
+        .status-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+        .status-icon.hazard { background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3); }
+        .status-icon.clear { background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.3); }
+        .result-title { font-size: 16px; font-weight: 700; }
+        .result-title.hazard { color: var(--hazard-red); }
+        .result-title.clear { color: var(--clear-green); }
+        .result-message { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        .stat-box { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 12px; text-align: center; }
+        .stat-value { font-size: 22px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
+        .stat-label { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+        .stat-box.delay .stat-value { color: var(--hazard-amber); }
+        .stat-box.saved .stat-value { color: var(--clear-green); }
+        .stat-box.hazard-flag .stat-value { color: var(--hazard-red); }
+        .stat-box.clear-flag .stat-value { color: var(--clear-green); }
+
+        .alt-route-banner { display: flex; align-items: center; gap: 10px; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.2); border-radius: 12px; padding: 12px 14px; }
+        .alt-route-icon { font-size: 18px; flex-shrink: 0; }
+        .alt-route-text { font-size: 13px; line-height: 1.4; }
+        .alt-route-text strong { color: var(--clear-green); font-weight: 700; }
+        .alt-route-text span { color: var(--text-secondary); }
+
+        /* ── Error ── */
+        #error-card { display: none; align-items: flex-start; gap: 12px; background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.25); border-radius: 12px; padding: 16px; animation: fadeIn 0.4s ease; }
+        #error-card.visible { display: flex; }
+        .error-icon { font-size: 18px; flex-shrink: 0; padding-top: 2px; }
+        .error-title { font-size: 13px; font-weight: 700; color: var(--hazard-red); margin-bottom: 4px; }
+        .error-message { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+
+        /* ── Route pills ── */
+        .route-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+        .pill { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 100px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; border: 1px solid; cursor: pointer; transition: var(--transition); }
+        .pill:hover { transform: translateY(-1px); }
+        .pill.waterlogging { background: rgba(59,130,246,0.12); border-color: rgba(59,130,246,0.3); color: #93c5fd; }
+        .pill.accident { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.3); color: #fca5a5; }
+        .pill.gridlock { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.3); color: #fcd34d; }
+        .pill.clear-pill { background: rgba(16,185,129,0.12); border-color: rgba(16,185,129,0.3); color: #6ee7b7; }
+
+        /* ── Map container ── */
+        #map-container { display: none; animation: fadeUp 0.5s ease both; }
+        #map-container.visible { display: block; }
+        #map { height: 100%; min-height: 420px; width: 100%; border-radius: var(--radius-lg); z-index: 1; }
+
+        /* ── V2 Ranked Routes List ── */
+        #ranked-routes { display: none; flex-direction: column; gap: 12px; animation: fadeUp 0.5s ease both; }
+        #ranked-routes.visible { display: flex; }
+
+        .route-card {
+            background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10);
+            border-radius: 14px; padding: 16px; transition: var(--transition);
+        }
+        .route-card:hover { border-color: rgba(255,255,255,0.2); background: rgba(255,255,255,0.06); }
+        .route-card.best { border-color: rgba(251,191,36,0.5); background: rgba(251,191,36,0.06); box-shadow: 0 0 20px rgba(251,191,36,0.1); }
+        .route-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .route-card-title { font-size: 14px; font-weight: 700; }
+        .route-card.best .route-card-title { color: var(--gold); }
+        .route-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 8px; border-radius: 6px; }
+        .route-badge.best-badge { background: rgba(251,191,36,0.2); color: var(--gold); }
+        .route-badge.alt-badge { background: rgba(148,163,184,0.15); color: var(--text-secondary); }
+
+        .route-stats-row { display: flex; gap: 16px; margin-bottom: 8px; }
+        .route-stat { font-size: 12px; color: var(--text-secondary); }
+        .route-stat strong { color: var(--text-primary); font-weight: 600; }
+
+        .route-rec { font-size: 12px; line-height: 1.4; padding: 8px 10px; border-radius: 8px; background: rgba(255,255,255,0.03); }
+
+        .hazard-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .hazard-chip { font-size: 10px; padding: 3px 8px; border-radius: 100px; font-weight: 600; }
+        .hazard-chip.WATERLOGGING { background: rgba(59,130,246,0.15); color: #93c5fd; }
+        .hazard-chip.ACCIDENT { background: rgba(239,68,68,0.15); color: #fca5a5; }
+        .hazard-chip.GRIDLOCK { background: rgba(245,158,11,0.15); color: #fcd34d; }
+
+        .analysis-msg { font-size: 12px; color: var(--text-muted); text-align: center; padding-top: 4px; }
+
+        footer { margin-top: 40px; text-align: center; font-size: 12px; color: var(--text-muted); animation: fadeIn 1s ease 0.5s both; }
+
+        @keyframes fadeUp   { from { opacity:0; transform: translateY(24px); } to { opacity:1; transform: translateY(0); } }
+        @keyframes fadeDown { from { opacity:0; transform: translateY(-16px); } to { opacity:1; transform: translateY(0); } }
+        @keyframes fadeIn   { from { opacity:0; } to { opacity:1; } }
+
+        @media (max-width: 480px) {
+            .card { padding: 20px 16px; }
+            .stats-grid { grid-template-columns: 1fr 1fr; }
+            .route-stats-row { flex-direction: column; gap: 4px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+
+    <div class="page-wrapper">
+
+        <header>
+            <div class="logo-badge"><span class="dot"></span> Urban Mobility Intelligence</div>
+            <h1>Intelligent <span>Route Navigator</span></h1>
+            <p class="subtitle">Scan routes for real-time hazards with live map visualization. Powered by OpenRouteService &amp; Nominatim.</p>
+        </header>
+
+        <div class="main-grid">
+
+            <!-- ── Left Panel: Controls ── -->
+            <div class="card" id="control-panel">
+
+                <div class="tab-group" role="tablist" aria-label="Mode selection">
+                    <button id="tab-v1" class="tab active" role="tab" aria-selected="true" onclick="switchTab('v1')">📍 Quick Scan</button>
+                    <button id="tab-v2" class="tab" role="tab" aria-selected="false" onclick="switchTab('v2')">🗺️ Real Routes</button>
+                </div>
+
+                <!-- ── V1: Old preset-based panel ── -->
+                <div id="panel-v1" class="input-panel visible">
+                    <label class="section-label" for="route-select">Select a known route</label>
+                    <select id="route-select" aria-label="Select a known route">
+                        <option value="Outer Ring Road">🌊  Outer Ring Road</option>
+                        <option value="MG Road">🚨  MG Road</option>
+                        <option value="Silk Board Junction">🚦  Silk Board Junction</option>
+                        <option value="Bannerghatta Road">✅  Bannerghatta Road</option>
+                    </select>
+                    <div class="route-pills">
+                        <span class="pill waterlogging" onclick="quickSelect('Outer Ring Road')">💧 Waterlogging</span>
+                        <span class="pill accident" onclick="quickSelect('MG Road')">🚨 Accident</span>
+                        <span class="pill gridlock" onclick="quickSelect('Silk Board Junction')">🚦 Gridlock</span>
+                        <span class="pill clear-pill" onclick="quickSelect('Bannerghatta Road')">✅ Clear</span>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <label class="section-label" for="route-custom">Or enter a custom route</label>
+                    <input id="route-custom" type="text" placeholder="e.g. Hosur Road, Unknown Route…" aria-label="Enter a custom route name" onkeydown="if(event.key==='Enter') scanV1()" />
+
+                    <button id="btn-v1" class="btn" onclick="scanV1()">🔍 &nbsp;Scan Route</button>
+                </div>
+
+                <!-- ── V2: Real routes panel ── -->
+                <div id="panel-v2" class="input-panel">
+                    <label class="section-label" for="input-origin">Origin address</label>
+                    <input id="input-origin" type="text" placeholder="e.g. Majestic Bus Station" aria-label="Origin address" />
+
+                    <label class="section-label" for="input-dest" style="margin-top:4px;">Destination address</label>
+                    <input id="input-dest" type="text" placeholder="e.g. Electronic City" aria-label="Destination address" onkeydown="if(event.key==='Enter') scanV2()" />
+
+                    <button id="btn-v2" class="btn" onclick="scanV2()">🗺️ &nbsp;Scan Real Routes</button>
+
+                    <p style="font-size:11px; color:var(--text-muted); margin-top:6px; line-height:1.5;">
+                        Uses Nominatim geocoding + OpenRouteService driving directions. Hazards are randomly injected for demonstration.
+                    </p>
+                </div>
+
+                <div class="divider"></div>
+
+                <!-- Loading -->
+                <div id="loading-state" role="status" aria-live="polite">
+                    <div class="spinner-ring"></div>
+                    <p class="loading-text">Scanning route intelligence…</p>
+                </div>
+
+                <!-- V1 Result -->
+                <div id="result-card" role="region" aria-label="Quick scan results" aria-live="polite">
+                    <div class="result-header">
+                        <div id="status-icon" class="status-icon" aria-hidden="true"></div>
+                        <div>
+                            <div id="result-title" class="result-title"></div>
+                            <div id="result-message" class="result-message"></div>
+                        </div>
+                    </div>
+                    <div class="stats-grid" id="stats-grid"></div>
+                    <div id="alt-route-banner" class="alt-route-banner" style="display:none;"></div>
+                </div>
+
+                <!-- V2 Ranked Routes -->
+                <div id="ranked-routes" role="region" aria-label="Ranked route results" aria-live="polite"></div>
+
+                <!-- Error -->
+                <div id="error-card" role="alert" aria-live="assertive">
+                    <div class="error-icon">⚠️</div>
+                    <div>
+                        <div class="error-title" id="error-title">Error</div>
+                        <div class="error-message" id="error-message"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Right Panel: Map ── -->
+            <div class="card" id="map-container">
+                <div class="section-label" style="margin-bottom:12px;">🌍 Live Route Map</div>
+                <div id="map"></div>
+            </div>
+
+        </div>
+
+        <footer>
+            <p>Intelligent Route Navigator &nbsp;·&nbsp; Leaflet.js + Spring Boot 3 + Strategy Pattern &nbsp;·&nbsp; Hackathon 2026</p>
+        </footer>
+
+    </div>
+
+    <script>
+        // ── State ──
+        let activeTab = 'v1';
+        let leafletMap = null;
+        let mapMarkers = [];
+
+        // ── Tab switching ──
+        function switchTab(tab) {
+            activeTab = tab;
+            document.querySelectorAll('.tab').forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
+            document.getElementById('tab-' + tab).classList.add('active');
+            document.getElementById('tab-' + tab).setAttribute('aria-selected', 'true');
+            document.querySelectorAll('.input-panel').forEach(p => p.classList.remove('visible'));
+            document.getElementById('panel-' + tab).classList.add('visible');
+            clearResults();
+        }
+
+        function quickSelect(routeName) {
+            document.getElementById('route-select').value = routeName;
+            const sel = document.getElementById('route-select');
+            sel.style.borderColor = 'var(--accent-cyan)';
+            sel.style.boxShadow = '0 0 0 3px rgba(6,182,212,0.2)';
+            setTimeout(() => { sel.style.borderColor = ''; sel.style.boxShadow = ''; }, 600);
+        }
+
+        function clearResults() {
+            ['loading-state','result-card','error-card','ranked-routes','map-container'].forEach(id => {
+                document.getElementById(id).classList.remove('visible');
+            });
+        }
+
+        function show(id) { document.getElementById(id).classList.add('visible'); }
+        function hide(id) { document.getElementById(id).classList.remove('visible'); }
+
+        // ── V1: Quick Scan (old /check-route) ──
+        async function scanV1() {
+            const custom = document.getElementById('route-custom').value.trim();
+            const routeName = custom || document.getElementById('route-select').value.trim();
+            if (!routeName) { showError('Validation Error', 'Please enter or select a route name.'); return; }
+
+            clearResults();
+            show('loading-state');
+            setBtnDisabled(true);
+
+            try {
+                const res = await fetch('/api/v1/mobility/check-route', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ routeName })
+                });
+                const data = await res.json();
+                hide('loading-state');
+                if (res.ok) { renderV1Result(data); }
+                else { showError(errorTitle(res.status), data.message || 'Unknown error.'); }
+            } catch (err) {
+                hide('loading-state');
+                showError('Network Error', 'Could not reach the server. Is it running on :8080?');
+            } finally { setBtnDisabled(false); }
+        }
+
+        function renderV1Result(data) {
+            const h = data.hazardDetected;
+            const icon = document.getElementById('status-icon');
+            icon.textContent = h ? '🚨' : '✅';
+            icon.className = 'status-icon ' + (h ? 'hazard' : 'clear');
+            const title = document.getElementById('result-title');
+            title.textContent = h ? 'Hazard Detected' : 'Route Clear';
+            title.className = 'result-title ' + (h ? 'hazard' : 'clear');
+            document.getElementById('result-message').textContent = data.message;
+
+            const grid = document.getElementById('stats-grid');
+            grid.innerHTML = h
+                ? `<div class="stat-box hazard-flag"><div class="stat-value">YES</div><div class="stat-label">Hazard</div></div>
+                   <div class="stat-box delay"><div class="stat-value">${data.estimatedDelayMinutes}</div><div class="stat-label">Delay (mins)</div></div>
+                   <div class="stat-box saved"><div class="stat-value">${data.timeSavedMinutes}</div><div class="stat-label">Time Saved</div></div>`
+                : `<div class="stat-box clear-flag"><div class="stat-value">NO</div><div class="stat-label">Hazard</div></div>
+                   <div class="stat-box" style="grid-column:2/4"><div class="stat-value" style="color:var(--clear-green)">0</div><div class="stat-label">Delay (mins)</div></div>`;
+
+            const banner = document.getElementById('alt-route-banner');
+            if (h && data.alternateRoute) {
+                banner.style.display = 'flex';
+                banner.innerHTML = `<div class="alt-route-icon">🗺️</div>
+                    <div class="alt-route-text"><strong>Recommended:</strong>
+                    <span> Take <strong>${esc(data.alternateRoute)}</strong> — saves <strong style="color:var(--hazard-amber)">${data.timeSavedMinutes} mins</strong></span></div>`;
+            } else { banner.style.display = 'none'; }
+            show('result-card');
+        }
+
+        // ── V2: Real Route Scan (/analyze) ──
+        async function scanV2() {
+            const origin = document.getElementById('input-origin').value.trim();
+            const dest   = document.getElementById('input-dest').value.trim();
+            if (!origin || !dest) { showError('Validation Error', 'Both origin and destination are required.'); return; }
+
+            clearResults();
+            show('loading-state');
+            setBtnDisabled(true);
+
+            try {
+                const res = await fetch('/api/v1/mobility/analyze', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ origin, destination: dest })
+                });
+                const data = await res.json();
+                hide('loading-state');
+                if (res.ok) { renderV2Result(data); }
+                else { showError(errorTitle(res.status), data.message || 'Unknown error.'); }
+            } catch (err) {
+                hide('loading-state');
+                showError('Network Error', 'Could not reach the server. Is it running on :8080?');
+            } finally { setBtnDisabled(false); }
+        }
+
+        function renderV2Result(data) {
+            // 1. Build ranked route cards
+            const container = document.getElementById('ranked-routes');
+            let html = '';
+
+            data.rankedRoutes.forEach((route, idx) => {
+                const isBest = route.isBestRoute || route.bestRoute;
+                const cardClass = isBest ? 'route-card best' : 'route-card';
+                const badge = isBest
+                    ? '<span class="route-badge best-badge">⭐ Best</span>'
+                    : `<span class="route-badge alt-badge">Option ${idx + 1}</span>`;
+
+                let chips = '';
+                if (route.hazards && route.hazards.length > 0) {
+                    chips = '<div class="hazard-chips">' +
+                        route.hazards.map(h => `<span class="hazard-chip ${h.type}">🔴 ${h.type} (severity ${h.severityScore})</span>`).join('') +
+                        '</div>';
+                }
+
+                html += `
+                <div class="${cardClass}">
+                    <div class="route-card-header">
+                        <div class="route-card-title">Route ${route.routeIndex + 1}</div>
+                        ${badge}
+                    </div>
+                    <div class="route-stats-row">
+                        <div class="route-stat">📏 <strong>${route.distanceKm.toFixed(1)} km</strong></div>
+                        <div class="route-stat">⏱️ <strong>${route.estimatedTotalMinutes} min</strong> (inc. hazards)</div>
+                        <div class="route-stat">📊 Score: <strong>${route.compositeScore.toFixed(1)}</strong></div>
+                    </div>
+                    <div class="route-rec">${esc(route.recommendation)}</div>
+                    ${chips}
+                </div>`;
+            });
+
+            html += `<div class="analysis-msg">${esc(data.analysisMessage)}</div>`;
+            container.innerHTML = html;
+            show('ranked-routes');
+
+            // 2. Build Leaflet map
+            renderMap(data);
+        }
+
+        function renderMap(data) {
+            show('map-container');
+
+            // Reset map if exists
+            if (leafletMap) { leafletMap.remove(); leafletMap = null; }
+            mapMarkers = [];
+
+            // Determine center from best route hazards or just center of first route
+            const best = data.bestRoute || data.rankedRoutes[0];
+            let centerLat = 12.97;  // Bangalore default
+            let centerLng = 77.59;
+
+            // Try to derive from hazard coords
+            const allHazards = data.rankedRoutes.flatMap(r => r.hazards || []).filter(h => h.segmentLat && h.segmentLng);
+            if (allHazards.length > 0) {
+                centerLat = allHazards.reduce((s, h) => s + h.segmentLat, 0) / allHazards.length;
+                centerLng = allHazards.reduce((s, h) => s + h.segmentLng, 0) / allHazards.length;
+            }
+
+            leafletMap = L.map('map').setView([centerLat, centerLng], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OSM contributors',
+                maxZoom: 18
+            }).addTo(leafletMap);
+
+            // Origin marker (green)
+            const greenIcon = L.divIcon({ html: '<div style="background:#10b981;width:16px;height:16px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 8px rgba(16,185,129,0.6);"></div>', className: '', iconSize: [16, 16], iconAnchor: [8, 8] });
+            // Dest marker (blue)
+            const blueIcon = L.divIcon({ html: '<div style="background:#3b82f6;width:16px;height:16px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 8px rgba(59,130,246,0.6);"></div>', className: '', iconSize: [16, 16], iconAnchor: [8, 8] });
+
+            // Plot hazards from ALL routes
+            const hazardColors = { WATERLOGGING: '#3b82f6', ACCIDENT: '#ef4444', GRIDLOCK: '#f59e0b' };
+            const bounds = [];
+
+            data.rankedRoutes.forEach(route => {
+                (route.hazards || []).forEach(h => {
+                    if (h.segmentLat && h.segmentLng) {
+                        const color = hazardColors[h.type] || '#ef4444';
+                        const circle = L.circleMarker([h.segmentLat, h.segmentLng], {
+                            radius: 10, fillColor: color, color: '#fff', weight: 2,
+                            opacity: 0.9, fillOpacity: 0.7
+                        }).addTo(leafletMap);
+                        circle.bindPopup(`<strong>${h.type}</strong><br/>Route ${route.routeIndex + 1}<br/>Severity: ${h.severityScore}/10`);
+                        bounds.push([h.segmentLat, h.segmentLng]);
+                        mapMarkers.push(circle);
+                    }
+                });
+            });
+
+            // If we have bounds, fit to them
+            if (bounds.length > 0) {
+                leafletMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+            }
+
+            // Force map redraw after container becomes visible
+            setTimeout(() => { leafletMap.invalidateSize(); }, 200);
+        }
+
+        // ── Helpers ──
+        function showError(title, message) {
+            document.getElementById('error-title').textContent = title;
+            document.getElementById('error-message').textContent = message;
+            show('error-card');
+        }
+
+        function errorTitle(status) {
+            return { 400: 'Bad Request (400)', 404: 'Route Not Found (404)', 502: 'External API Error (502)', 500: 'Server Error (500)' }[status] || `Error ${status}`;
+        }
+
+        function setBtnDisabled(d) {
+            document.getElementById('btn-v1').disabled = d;
+            document.getElementById('btn-v2').disabled = d;
+        }
+
+        function esc(str) {
+            return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+    </script>
+</body>
+</html>
